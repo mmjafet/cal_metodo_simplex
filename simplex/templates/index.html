@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>Metodo Simplex</title>
+  <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body {
+      padding: 20px;
+    }
+    .constraint, .objective {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .constraint input, .objective input {
+      margin-right: 10px;
+    }
+    table {
+      margin-top: 20px;
+    }
+    /* Animación de botón */
+    .btn {
+      transition: all 0.3s ease;
+    }
+    .btn:hover {
+      transform: scale(1.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="text-center">Resolucion por el metodo Simplex</h1>
+    <form id="simplex-form">
+      <div class="form-group">
+        <label for="objective">¿Cuál es el objetivo de la función?</label>
+        <select class="form-control" id="objective" name="objective">
+          <option value="Maximizar">Maximizar</option>
+          <option value="Minimizar">Minimizar</option>
+        </select>
+      </div>
+      <h2>Función Objetivo:</h2>
+      <div id="objective-container" class="objective">
+        <input type="number" class="form-control" name="c[]" placeholder="Coef X1" required>
+        <input type="number" class="form-control" name="c[]" placeholder="Coef X2" required>
+      </div>
+      <button type="button" id="add-objective-variable" class="btn btn-primary">Agregar Variable</button>
+      <h2>Restricciones:</h2>
+      <div id="constraints"></div>
+      <button type="button" id="add-constraint" class="btn btn-primary">Agregar restricción</button>
+      <br><br>
+      <button type="submit" class="btn btn-success">Resolver</button>
+    </form>
+    <h2>Tabla</h2>
+    <div id="tableau-container"></div>
+    <h2>Solución</h2>
+    <div id="solution-container"></div>
+  </div>
+
+  <script>
+    document.getElementById('add-objective-variable').addEventListener('click', function() {
+      const div = document.getElementById('objective-container');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'form-control';
+      input.name = 'c[]';
+      input.placeholder = 'Coef X' + (div.getElementsByTagName('input').length + 1);
+      input.required = true;
+      div.appendChild(input);
+    });
+
+    document.getElementById('add-constraint').addEventListener('click', function() {
+      const numVars = document.getElementById('objective-container').getElementsByTagName('input').length;
+      const div = document.createElement('div');
+      div.classList.add('constraint');
+      for (let i = 1; i <= numVars; i++) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'form-control a';
+        input.placeholder = 'Coef X' + i;
+        input.required = true;
+        div.appendChild(input);
+      }
+      const sign = document.createElement('select');
+      sign.className = 'form-control sign';
+      sign.innerHTML = `
+        <option value="<=">&le;</option>
+        <option value="=">=</option>
+        <option value=">=">&ge;</option>
+      `;
+      sign.style.marginRight = '10px';
+      div.appendChild(sign);
+      const bInput = document.createElement('input');
+      bInput.type = 'number';
+      bInput.className = 'form-control b';
+      bInput.placeholder = 'b';
+      bInput.required = true;
+      div.appendChild(bInput);
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'btn btn-danger remove-constraint';
+      removeButton.textContent = 'Eliminar';
+      div.appendChild(removeButton);
+      document.getElementById('constraints').appendChild(div);
+    });
+
+    document.getElementById('constraints').addEventListener('click', function(event) {
+      if (event.target.classList.contains('remove-constraint')) {
+        event.target.parentElement.remove();
+      }
+    });
+
+    document.getElementById('simplex-form').addEventListener('submit', function(event) {
+      event.preventDefault();
+      solveMethod('simplex');
+    });
+
+    document.getElementById('solve-graphical').addEventListener('click', function(event) {
+      event.preventDefault();
+      solveMethod('graphical');
+    });
+
+    document.getElementById('open-graph-window').addEventListener('click', function(event) {
+      event.preventDefault();
+      openGraphicalSolution();
+    });
+
+    function solveMethod(method) {
+      var socket = io();
+      var objective = document.getElementById('objective').value;
+      var c = Array.from(document.getElementsByName('c[]')).map(input => input.value);
+      var constraints = document.getElementsByClassName('constraint');
+      var A = [], b = [];
+      for (var i = 0; i < constraints.length; i++) {
+        var constraint = Array.from(constraints[i].getElementsByClassName('a')).map(input => input.value);
+        var b_val = constraints[i].getElementsByClassName('b')[0].value;
+        A.push(constraint);
+        b.push(b_val);
+      }
+      var data = {
+        objective: objective,
+        c: c,
+        A: A,
+        b: b,
+        method: method
+      };
+      socket.emit('solve', data);
+
+      socket.on('update_tableau', function(data) {
+        var tableauHtml = '<table class="table table-bordered"><thead><tr><th></th>';
+        data.tableau[0].forEach((val, index) => {
+          tableauHtml += `<th>X${index + 1}</th>`;
+        });
+        tableauHtml += '</tr></thead><tbody>';
+        data.tableau.forEach((row, rowIndex) => {
+          tableauHtml += `<tr><td>Fila ${rowIndex + 1}</td>`;
+          row.forEach(val => {
+            tableauHtml += `<td>${val}</td>`;
+          });
+          tableauHtml += '</tr>';
+        });
+        tableauHtml += '</tbody></table>';
+        document.getElementById('tableau-container').innerHTML = tableauHtml;
+      });
+
+      socket.on('solution', function(data) {
+        var solutionHtml = `<p>Z: ${data.z}</p>`;
+        solutionHtml += '<table class="table table-bordered"><thead><tr><th>Variable</th><th>Valor</th></tr></thead><tbody>';
+        Object.keys(data.solution).forEach((key, index) => {
+          solutionHtml += `<tr><td>X${index + 1}</td><td>${data.solution[key]}</td></tr>`;
+        });
+        solutionHtml += '</tbody></table>';
+        document.getElementById('solution-container').innerHTML = solutionHtml;
+      });
+
+      socket.on('graphical_solution', function(data) {
+        console.log('Graphical solution data:', data);
+        if (data.success) {
+          const points = data.points;
+          const x = points.map(point => point.x);
+          const y = points.map(point => point.y);
+          const labels = points.map(point => point.label);
+
+          const layout = {
+            title: 'Solución Gráfica',
+            xaxis: { title: 'Variable X1' },
+            yaxis: { title: 'Variable X2' }
+          };
+
+          const trace = {
+            x: x,
+            y: y,
+            mode: 'markers+text',
+            type: 'scatter',
+            name: 'Solución Óptima',
+            text: labels,
+            textposition: 'bottom center'
+          };
+
+          const graphWindow = window.open('', '_blank');
+          graphWindow.document.write('<div id="graph" style="width: 100%; height: 100%;"></div>');
+          graphWindow.document.close();
+          Plotly.newPlot(graphWindow.document.getElementById('graph'), [trace], layout);
+        } else {
+          alert('No se pudo encontrar una solución válida.');
+        }
+      });
+    }
+
+    function openGraphicalSolution() {
+      var objective = document.getElementById('objective').value;
+      var c = Array.from(document.getElementsByName('c[]')).map(input => input.value);
+      var constraints = document.getElementsByClassName('constraint');
+      var A = [], b = [];
+      for (var i = 0; i < constraints.length; i++) {
+        var constraint = Array.from(constraints[i].getElementsByClassName('a')).map(input => input.value);
+        var b_val = constraints[i].getElementsByClassName('b')[0].value;
+        A.push(constraint.map(Number));
+        b.push(Number(b_val));
+      }
+
+      var data = {
+        objective: objective,
+        c: c.map(Number),
+        A: A,
+        b: b,
+      };
+
+      console.log('Sending data for graphical solution:', data);
+
+      fetch('/graphical_solution', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      })
+      .then(response => response.json())
+      .then(data => {
+        console.log('Graphical solution response:', data);
+        if (data.success) {
+          const points = data.points;
+          const x = points.map(point => point.x);
+          const y = points.map(point => point.y);
+          const labels = points.map(point => point.label);
+
+          const layout = {
+            title: 'Solución Gráfica',
+            xaxis: { title: 'Variable X1' },
+            yaxis: { title: 'Variable X2' }
+          };
+
+          const trace = {
+            x: x,
+            y: y,
+            mode: 'markers+text',
+            type: 'scatter',
+            name: 'Solución Óptima',
+            text: labels,
+            textposition: 'bottom center'
+          };
+
+          const graphWindow = window.open('', '_blank');
+          graphWindow.document.write('<div id="graph" style="width: 100%; height: 100%;"></div>');
+          graphWindow.document.close();
+          Plotly.newPlot(graphWindow.document.getElementById('graph'), [trace], layout);
+        } else {
+          alert('No se pudo encontrar una solución válida.');
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('Error al procesar la solicitud.');
+      });
+    }
+  </script>
+  
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
